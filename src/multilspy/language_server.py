@@ -9,6 +9,7 @@ import asyncio
 import dataclasses
 import json
 import time
+import sys
 import logging
 import os
 import pathlib
@@ -122,6 +123,10 @@ class LanguageServer:
             from multilspy.language_servers.clangd_language_server.clangd_language_server import ClangdLanguageServer
 
             return ClangdLanguageServer(config, logger, repository_root_path)
+        elif config.code_language == Language.COBOL:
+            from multilspy.language_servers.superbol_language_server.superbol_server import Superbol
+
+            return Superbol(config, logger, repository_root_path)
         else:
             logger.log(f"Language {config.code_language} is not supported", logging.ERROR)
             raise MultilspyException(f"Language {config.code_language} is not supported")
@@ -173,6 +178,7 @@ class LanguageServer:
             process_launch_info,
             logger=logging_fn,
             start_independent_lsp_process=config.start_independent_lsp_process,
+            ignore_content_type_header=config.ignore_content_type_header,
         )
 
         self.language_id = language_id
@@ -766,9 +772,11 @@ class SyncLanguageServer:
 
         :return: None
         """
+        print(f"Starting the language server 1: {type(self.language_server).__name__}")
         self.loop = asyncio.new_event_loop()
         loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         loop_thread.start()
+        print(f"starting the language server 2: {type(self.language_server).__name__}")
         ctx = self.language_server.start_server()
         asyncio.run_coroutine_threadsafe(ctx.__aenter__(), loop=self.loop).result()
         yield self

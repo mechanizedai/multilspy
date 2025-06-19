@@ -33,6 +33,7 @@ import dataclasses
 import json
 import os
 import psutil
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from .lsp_requests import LspNotification, LspRequest
@@ -96,13 +97,21 @@ class StopLoopException(Exception):
     pass
 
 
-def create_message(payload: PayloadLike):
+def create_message(payload: PayloadLike, ignore_content_type_header: bool = False):
     body = json.dumps(payload, check_circular=False, ensure_ascii=False, separators=(",", ":")).encode(ENCODING)
-    return (
-        f"Content-Length: {len(body)}\r\n".encode(ENCODING),
-        "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n".encode(ENCODING),
-        body,
-    )
+    if ignore_content_type_header:
+        return (
+            f"Content-Length: {len(body)}\r\n".encode(ENCODING),
+            "\r\n".encode(ENCODING),
+            body,
+        )
+    else:
+        return (
+            f"Content-Length: {len(body)}\r\n".encode(ENCODING),
+            "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n".encode(ENCODING),
+            body,
+        )
+    
 
 
 class MessageType:
@@ -183,6 +192,7 @@ class LanguageServerHandler:
         process_launch_info: ProcessLaunchInfo,
         logger=None,
         start_independent_lsp_process=True,
+        ignore_content_type_header=False,
     ) -> None:
         """
         Params:
@@ -206,6 +216,7 @@ class LanguageServerHandler:
         self.task_counter = 0
         self.loop = None
         self.start_independent_lsp_process = start_independent_lsp_process
+        self.ignore_content_type_header = ignore_content_type_header
 
     async def start(self) -> None:
         """
@@ -214,6 +225,10 @@ class LanguageServerHandler:
         """
         child_proc_env = os.environ.copy()
         child_proc_env.update(self.process_launch_info.env)
+        print(f"Starting LSP server with command: {self.process_launch_info.cmd}")
+        # print(f"Using environment variables: {json.dumps(child_proc_env)}")
+        # print(self.process_launch_info.cwd)
+        # print(self.start_independent_lsp_process)
         self.process = await asyncio.create_subprocess_shell(
             self.process_launch_info.cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -229,6 +244,25 @@ class LanguageServerHandler:
         self.task_counter += 1
         self.tasks[self.task_counter] = self.loop.create_task(self.run_forever_stderr())
         self.task_counter += 1
+        self.tasks[self.task_counter] = self.loop.create_task(self._monitor_process_exit())
+        self.task_counter += 1
+
+    async def _monitor_process_exit(self):
+        if self.process:
+            returncode = await self.process.wait()
+            print(f"[LSP DEBUG] Process exited early with return code {returncode}")
+            if self.process.stderr:
+                try:
+                    stderr_output = await self.process.stderr.read()
+                    print("[LSP DEBUG] Early stderr output:\n", stderr_output.decode("utf-8", errors="replace"))
+                except Exception as e:
+                    print("[LSP DEBUG] Failed to read early server stderr:", e)
+            if self.process.stdout:
+                try:
+                    stdout_output = await self.process.stdout.read()
+                    print("[LSP DEBUG] Early stdout output:\n", stdout_output.decode("utf-8", errors="replace"))
+                except Exception as e:
+                    print("[LSP DEBUG] Failed to read early server stdout:", e)
 
     async def stop(self) -> None:
         """
@@ -467,7 +501,27 @@ class LanguageServerHandler:
         self._response_handlers[request_id] = request
         async with request.cv:
             await self._send_payload(make_request(method, request_id, params))
-            await request.cv.wait()
+            try:
+                await asyncio.wait_for(request.cv.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                print("Timeout waiting for response. Checking if server process is still running...")
+                if self.process and self.process.returncode is not None:
+                    print(f"Server process exited with return code {self.process.returncode}")
+                    if self.process.stderr:
+                        try:
+                            stderr_output = await self.process.stderr.read()
+                            print("Server stderr output:\n", stderr_output.decode("utf-8", errors="replace"))
+                        except Exception as e:
+                            print("Failed to read server stderr:", e)
+                    if self.process.stdout:
+                        try:
+                            stdout_output = await self.process.stdout.read()
+                            print("Server stdout output:\n", stdout_output.decode("utf-8", errors="replace"))
+                        except Exception as e:
+                            print("Failed to read server stdout:", e)
+                else:
+                    print("Server process is still running (or not started).")
+                raise
         if isinstance(request.error, Error):
             raise request.error
         return request.result
@@ -478,7 +532,7 @@ class LanguageServerHandler:
         """
         if not self.process or not self.process.stdin:
             return
-        msg = create_message(payload)
+        msg = create_message(payload, self.ignore_content_type_header)
         if self.logger:
             self.logger("client", "server", payload)
         self.process.stdin.writelines(msg)
@@ -489,7 +543,7 @@ class LanguageServerHandler:
         """
         if not self.process or not self.process.stdin:
             return
-        msg = create_message(payload)
+        msg = create_message(payload, self.ignore_content_type_header)
         if self.logger:
             self.logger("client", "server", payload)
         self.process.stdin.writelines(msg)
