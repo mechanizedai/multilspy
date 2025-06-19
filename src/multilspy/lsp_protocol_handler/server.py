@@ -499,11 +499,8 @@ class LanguageServerHandler:
         request_id = self.request_id
         self.request_id += 1
         self._response_handlers[request_id] = request
-        print(LanguageServerHandler.__name__, "send_request", "1", method, request_id, params)
         async with request.cv:
-            print(LanguageServerHandler.__name__, "send_request", "2", method, request_id, params)
             await self._send_payload(make_request(method, request_id, params))
-            print(LanguageServerHandler.__name__, "send_request", "3", method, request_id, params, "waiting for response")
             try:
                 await asyncio.wait_for(request.cv.wait(), timeout=10)
             except asyncio.TimeoutError:
@@ -525,7 +522,6 @@ class LanguageServerHandler:
                 else:
                     print("Server process is still running (or not started).")
                 raise
-            print(LanguageServerHandler.__name__, "send_request", "4", method, request_id, params, "response received")
         if isinstance(request.error, Error):
             raise request.error
         return request.result
@@ -548,7 +544,6 @@ class LanguageServerHandler:
         if not self.process or not self.process.stdin:
             return
         msg = create_message(payload, self.ignore_content_type_header)
-        print(LanguageServerHandler.__name__, "_send_payload", payload)
         if self.logger:
             self.logger("client", "server", payload)
         self.process.stdin.writelines(msg)
