@@ -21,6 +21,7 @@ class Language(str, Enum):
     RUBY = "ruby"
     DART = "dart"
     CPP = "cpp"
+    COBOL = "cobol"
 
     def __str__(self) -> str:
         return self.value
@@ -33,6 +34,7 @@ class MultilspyConfig:
     code_language: Language
     trace_lsp_communication: bool = False
     start_independent_lsp_process: bool = True
+    ignore_content_type_header: bool = False
 
     @classmethod
     def from_dict(cls, env: dict):
